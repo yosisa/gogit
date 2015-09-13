@@ -71,14 +71,14 @@ func (r *Repository) readObject(id SHA1, obj Object, headerOnly bool) (Object, e
 		entry objectEntry
 		err   error
 	)
-	entry, err = newLooseObjectEntry(r.root, id)
-	if err != nil {
-		if r.pack == nil {
-			if err = r.openPack(); err != nil {
-				return nil, err
-			}
+	if r.pack == nil {
+		if err = r.openPack(); err != nil {
+			return nil, err
 		}
-		if entry, err = r.pack.entry(id); err != nil {
+	}
+
+	if entry, err = r.pack.entry(id); err != nil {
+		if entry, err = newLooseObjectEntry(r.root, id); err != nil {
 			return nil, err
 		}
 	}
