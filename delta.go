@@ -1,59 +1,37 @@
 package git
 
 import (
-	"bufio"
-	"bytes"
-	"compress/zlib"
 	"errors"
 	"io"
-	"io/ioutil"
 )
 
 var ErrInvalidDelta = errors.New("invalid delta")
 
-func readDelta(r io.Reader) ([]byte, error) {
-	zr, err := zlib.NewReader(r)
+func applyDelta(srcEntry objectEntry, delta *bytesBuffer) (*bytesBuffer, error) {
+	defer srcEntry.Close()
+	defer delta.Close()
+	src, err := srcEntry.ReadAll()
 	if err != nil {
 		return nil, err
 	}
-	defer zr.Close()
-	return ioutil.ReadAll(zr)
-}
 
-func applyDelta(src io.Reader, delta []byte) (io.ReadCloser, error) {
-	bs, err := ioutil.ReadAll(src)
-	if err != nil {
-		return nil, err
-	}
-	data, err := applyDeltaBytes(bs, delta)
-	if err != nil {
-		return nil, err
-	}
-	return ioutil.NopCloser(bytes.NewReader(data)), nil
-}
-
-func applyDeltaBytes(src []byte, delta []byte) ([]byte, error) {
-	br := bufio.NewReader(bytes.NewReader(delta))
-	srcSize, err := deltaHeaderSize(br)
+	srcSize, err := deltaHeaderSize(delta)
 	if err != nil {
 		return nil, err
 	}
 	if srcSize != len(src) {
 		return nil, ErrInvalidDelta
 	}
-	dstSize, err := deltaHeaderSize(br)
+	dstSize, err := deltaHeaderSize(delta)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
+	data := acquireBytesBuffer()
 	for {
-		b, err := br.ReadByte()
+		b, err := delta.ReadByte()
 		if err == io.EOF {
-			if out := buf.Bytes(); len(out) == dstSize {
-				return out, nil
-			}
-			return nil, ErrInvalidDelta
+			break
 		} else if err != nil {
 			return nil, err
 		}
@@ -62,7 +40,7 @@ func applyDeltaBytes(src []byte, delta []byte) ([]byte, error) {
 			var srcOffset, srcLen int
 			for i := 0; i < 4; i++ {
 				if b&(1<<uint(i)) != 0 {
-					b, err := br.ReadByte()
+					b, err := delta.ReadByte()
 					if err != nil {
 						return nil, err
 					}
@@ -71,7 +49,7 @@ func applyDeltaBytes(src []byte, delta []byte) ([]byte, error) {
 			}
 			for i := 0; i < 3; i++ {
 				if b&(1<<uint(4+i)) != 0 {
-					b, err := br.ReadByte()
+					b, err := delta.ReadByte()
 					if err != nil {
 						return nil, err
 					}
@@ -84,18 +62,24 @@ func applyDeltaBytes(src []byte, delta []byte) ([]byte, error) {
 			if srcLen < 0 || srcOffset+srcLen > srcSize || srcLen > dstSize {
 				return nil, ErrInvalidDelta
 			}
-			if _, err = buf.Write(src[srcOffset : srcOffset+srcLen]); err != nil {
+			if _, err = data.Write(src[srcOffset : srcOffset+srcLen]); err != nil {
 				return nil, err
 			}
 		} else if b != 0 {
-			io.Copy(buf, io.LimitReader(br, int64(b)))
+			io.Copy(data, io.LimitReader(delta, int64(b)))
 		} else {
 			return nil, ErrInvalidDelta
 		}
 	}
+
+	if out := data.Bytes(); len(out) != dstSize {
+		data.Close()
+		return nil, ErrInvalidDelta
+	}
+	return data, nil
 }
 
-func deltaHeaderSize(br *bufio.Reader) (int, error) {
+func deltaHeaderSize(br byteReader) (int, error) {
 	header, err := readPackEntryHeader(br)
 	if err != nil {
 		return 0, err

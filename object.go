@@ -1,7 +1,5 @@
 package git
 
-import "io"
-
 type Object interface {
 	SHA1() SHA1
 	Parse([]byte) error
@@ -25,6 +23,6 @@ func newObject(typ string, id SHA1, repo *Repository) Object {
 
 type objectEntry interface {
 	Type() string
-	Reader() io.Reader
+	ReadAll() ([]byte, error)
 	Close() error
 }

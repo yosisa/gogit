@@ -1,10 +1,8 @@
 package git
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -93,12 +91,11 @@ func (r *Repository) readObject(id SHA1, obj Object, headerOnly bool) (Object, e
 	if headerOnly {
 		return obj, nil
 	}
-
-	buf := new(bytes.Buffer)
-	if _, err = io.Copy(buf, entry.Reader()); err != nil {
+	b, err := entry.ReadAll()
+	if err != nil {
 		return nil, err
 	}
-	err = obj.Parse(buf.Bytes())
+	err = obj.Parse(b)
 	return obj, err
 }
 

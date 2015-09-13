@@ -1,13 +1,9 @@
 package git
 
 import (
-	"bufio"
-	"bytes"
-	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 )
@@ -24,7 +20,7 @@ type PackHeader struct {
 
 type Pack struct {
 	PackHeader
-	f   *os.File
+	r   *packReader
 	idx *PackIndexV2
 }
 
@@ -41,7 +37,7 @@ func OpenPack(path string) (*Pack, error) {
 		return nil, err
 	}
 	pack := &Pack{
-		f:   f,
+		r:   newPackReader(f),
 		idx: idx,
 	}
 	err = pack.verify()
@@ -49,7 +45,7 @@ func OpenPack(path string) (*Pack, error) {
 }
 
 func (p *Pack) verify() (err error) {
-	if err = binary.Read(p.f, binary.BigEndian, &p.PackHeader); err != nil {
+	if err = binary.Read(p.r, binary.BigEndian, &p.PackHeader); err != nil {
 		return
 	}
 	if p.Magic != packMagic || p.Version != 2 {
@@ -59,7 +55,7 @@ func (p *Pack) verify() (err error) {
 }
 
 func (p *Pack) Close() error {
-	return p.f.Close()
+	return p.r.Close()
 }
 
 func (p *Pack) Object(id SHA1, repo *Repository) (Object, error) {
@@ -68,12 +64,11 @@ func (p *Pack) Object(id SHA1, repo *Repository) (Object, error) {
 		return nil, err
 	}
 	obj := newObject(entry.Type(), id, repo)
-
-	buf := new(bytes.Buffer)
-	if _, err := io.Copy(buf, entry.Reader()); err != nil {
+	b, err := entry.ReadAll()
+	if err != nil {
 		return nil, err
 	}
-	obj.Parse(buf.Bytes())
+	obj.Parse(b)
 	return obj, nil
 }
 
@@ -86,12 +81,11 @@ func (p *Pack) entry(id SHA1) (*packEntry, error) {
 }
 
 func (p *Pack) entryAt(offset int64) (*packEntry, error) {
-	if _, err := p.f.Seek(offset, os.SEEK_SET); err != nil {
+	if _, err := p.r.Seek(offset, os.SEEK_SET); err != nil {
 		return nil, err
 	}
 
-	br := bufio.NewReader(p.f)
-	header, err := readPackEntryHeader(br)
+	header, err := readPackEntryHeader(p.r)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +106,7 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 	case packEntryTag:
 		pe.typ = "tag"
 	case packEntryOfsDelta:
-		header, err := readPackEntryHeader(br)
+		header, err := readPackEntryHeader(p.r)
 		if err != nil {
 			return nil, err
 		}
@@ -121,34 +115,36 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 			ofs += 1
 			ofs = (ofs << 7) + h.Size()
 		}
-		delta, err := readDelta(br)
+		delta, err := p.readDelta()
 		if err != nil {
 			return nil, err
 		}
+
 		entry, err := p.entryAt(offset - ofs)
 		if err != nil {
 			return nil, err
 		}
 		pe.typ = entry.Type()
-		if pe.r, err = applyDelta(entry.Reader(), delta); err != nil {
+		if pe.buf, err = applyDelta(entry, delta); err != nil {
 			return nil, err
 		}
 		return &pe, nil
 	case packEntryRefDelta:
-		id, err := readSHA1(br)
+		id, err := readSHA1(p.r)
 		if err != nil {
 			return nil, err
 		}
-		delta, err := readDelta(br)
+		delta, err := p.readDelta()
 		if err != nil {
 			return nil, err
 		}
+
 		entry, err := p.entry(id)
 		if err != nil {
 			return nil, err
 		}
 		pe.typ = entry.Type()
-		if pe.r, err = applyDelta(entry.Reader(), delta); err != nil {
+		if pe.buf, err = applyDelta(entry, delta); err != nil {
 			return nil, err
 		}
 		return &pe, nil
@@ -156,10 +152,17 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 		return nil, fmt.Errorf("Unknown pack entry type: %d", typ)
 	}
 
-	if pe.r, err = zlib.NewReader(br); err != nil {
+	pe.pr = p.r
+	return &pe, nil
+}
+
+func (p *Pack) readDelta() (*bytesBuffer, error) {
+	zr, err := p.r.ZlibReader()
+	if err != nil {
 		return nil, err
 	}
-	return &pe, nil
+	defer zr.Close()
+	return newBytesBuffer(zr)
 }
 
 type packEntryType byte
@@ -177,19 +180,34 @@ const (
 
 type packEntry struct {
 	typ string
-	r   io.ReadCloser
+	buf *bytesBuffer
+	pr  *packReader
 }
 
 func (p *packEntry) Type() string {
 	return p.typ
 }
 
-func (p *packEntry) Reader() io.Reader {
-	return p.r
+func (p *packEntry) ReadAll() ([]byte, error) {
+	if p.buf == nil {
+		zr, err := p.pr.ZlibReader()
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+
+		if p.buf, err = newBytesBuffer(zr); err != nil {
+			return nil, err
+		}
+	}
+	return p.buf.Bytes(), nil
 }
 
-func (p *packEntry) Close() error {
-	return p.r.Close()
+func (p *packEntry) Close() (err error) {
+	if p.buf != nil {
+		err = p.buf.Close()
+	}
+	return
 }
 
 type packEntryHeader byte
@@ -210,7 +228,10 @@ func (b packEntryHeader) Size() int64 {
 	return int64(b & 0x7f)
 }
 
-func readPackEntryHeader(br *bufio.Reader) (header []packEntryHeader, err error) {
+var packEntryHeaderScratch []packEntryHeader = make([]packEntryHeader, 0, 10)
+
+func readPackEntryHeader(br byteReader) (header []packEntryHeader, err error) {
+	header = packEntryHeaderScratch[:0]
 	for {
 		var b byte
 		if b, err = br.ReadByte(); err != nil {

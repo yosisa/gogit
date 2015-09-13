@@ -18,7 +18,7 @@ func (b *Blob) SHA1() SHA1 {
 }
 
 func (b *Blob) Parse(data []byte) error {
-	b.Data = data
+	b.Data = cloneBytes(data)
 	return nil
 }
 
@@ -28,4 +28,11 @@ func (b *Blob) Resolve() error {
 
 func (b *Blob) Resolved() bool {
 	return b.Data != nil
+}
+
+func cloneBytes(b []byte) []byte {
+	n := len(b)
+	dst := make([]byte, n, n)
+	copy(dst, b)
+	return dst
 }

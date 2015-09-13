@@ -13,6 +13,7 @@ type looseObjectEntry struct {
 	zr  io.ReadCloser
 	br  *bufio.Reader
 	typ string
+	buf *bytesBuffer
 }
 
 func newLooseObjectEntry(root string, id SHA1) (*looseObjectEntry, error) {
@@ -52,11 +53,19 @@ func (e *looseObjectEntry) Type() string {
 	return e.typ
 }
 
-func (e *looseObjectEntry) Reader() io.Reader {
-	return e.br
+func (e *looseObjectEntry) ReadAll() ([]byte, error) {
+	defer e.zr.Close()
+	defer e.f.Close()
+	var err error
+	if e.buf, err = newBytesBuffer(e.br); err != nil {
+		return nil, err
+	}
+	return e.buf.Bytes(), nil
 }
 
-func (e *looseObjectEntry) Close() error {
-	e.zr.Close()
-	return e.f.Close()
+func (e *looseObjectEntry) Close() (err error) {
+	if e.buf != nil {
+		err = e.buf.Close()
+	}
+	return
 }

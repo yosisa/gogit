@@ -68,7 +68,7 @@ func (c *Commit) Parse(data []byte) error {
 	c.Parents = parents
 	c.Author = author
 	c.Committer = committer
-	c.Data = data[1:]
+	c.Data = cloneBytes(data[1:])
 	return nil
 }
 

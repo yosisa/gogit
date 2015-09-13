@@ -44,7 +44,7 @@ func (t *Tag) Parse(data []byte) error {
 	t.Object = obj
 	t.Tagger = tagger
 	t.Name = string(kv["tag"])
-	t.Data = data[1:]
+	t.Data = cloneBytes(data[1:])
 	return nil
 }
 
