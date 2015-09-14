@@ -26,7 +26,7 @@ type PackHeader struct {
 
 type Pack struct {
 	PackHeader
-	r   *packReader
+	r   packReader
 	idx *PackIndexV2
 }
 
@@ -197,7 +197,7 @@ const (
 type packEntry struct {
 	typ       string
 	buf       *bytesBuffer
-	pr        *packReader
+	pr        packReader
 	offset    int64
 	headerLen int
 }
@@ -208,7 +208,7 @@ func (p *packEntry) Type() string {
 
 func (p *packEntry) ReadAll() ([]byte, error) {
 	if p.buf == nil {
-		if p.pr.offset != p.offset {
+		if p.pr.Offset() != p.offset {
 			if _, err := p.pr.Seek(p.offset+int64(p.headerLen), os.SEEK_SET); err != nil {
 				return nil, err
 			}
