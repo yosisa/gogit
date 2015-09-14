@@ -38,7 +38,7 @@ func (c *Commit) Parse(data []byte) error {
 	if value, data, err = readKV(data, "tree "); err != nil {
 		return err
 	}
-	tree := newTree(SHA1FromString(string(value)), c.repo)
+	tree := newTree(SHA1FromHex(value), c.repo)
 
 	for {
 		value, data, err = readKV(data, "parent ")
@@ -47,7 +47,7 @@ func (c *Commit) Parse(data []byte) error {
 		} else if err != nil {
 			return err
 		}
-		parents = append(parents, newCommit(SHA1FromString(string(value)), c.repo))
+		parents = append(parents, newCommit(SHA1FromHex(value), c.repo))
 	}
 
 	if value, data, err = readKV(data, "author "); err != nil {

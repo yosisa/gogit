@@ -57,7 +57,7 @@ func (r *Repository) looseRef(name string) (*Ref, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Ref{Name: name, SHA1: SHA1FromString(string(b[:len(b)-1]))}, nil
+	return &Ref{Name: name, SHA1: SHA1FromHex(b[:len(b)-1])}, nil
 }
 
 func (r *Repository) Branches() []*Ref {
@@ -171,7 +171,7 @@ func (p *PackedRefs) Parse() error {
 			if ref == nil {
 				return ErrUnknownFormat
 			}
-			commit := SHA1FromString(string(line[1:]))
+			commit := SHA1FromHex(line[1:])
 			ref.Commit = &commit
 			continue
 		}
@@ -180,7 +180,7 @@ func (p *PackedRefs) Parse() error {
 			return ErrUnknownFormat
 		}
 		name := string(items[1])
-		ref = &Ref{Name: name, SHA1: SHA1FromString(string(items[0]))}
+		ref = &Ref{Name: name, SHA1: SHA1FromHex(items[0])}
 		p.refs[name] = ref
 	}
 	if err := scan.Err(); err != nil {

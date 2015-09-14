@@ -29,7 +29,14 @@ func NewSHA1(s string) (sha SHA1, err error) {
 	return
 }
 
-func SHA1FromString(s string) SHA1 {
+func SHA1FromHex(b []byte) (sha SHA1) {
+	if _, err := hex.Decode(sha[:], b); err != nil {
+		panic(err)
+	}
+	return
+}
+
+func SHA1FromHexString(s string) SHA1 {
 	sha, err := NewSHA1(s)
 	if err != nil {
 		panic(err)

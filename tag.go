@@ -36,7 +36,7 @@ func (t *Tag) Parse(data []byte) error {
 		return err
 	}
 
-	obj := newObject(string(kv["type"]), SHA1FromString(string(kv["object"])), t.repo)
+	obj := newObject(string(kv["type"]), SHA1FromHex(kv["object"]), t.repo)
 	tagger, err := newUser(kv["tagger"])
 	if err != nil {
 		return err
