@@ -44,13 +44,19 @@ func (idx *PackIndexV2) Parse(r io.Reader) (err error) {
 
 	total := int(idx.Fanout[255])
 	idx.Objects = make([]SHA1, total, total)
-	if err = binary.Read(r, binary.BigEndian, idx.Objects); err != nil {
-		return
+	for i := 0; i < total; i++ {
+		if err = idx.Objects[i].Fill(r); err != nil {
+			return
+		}
 	}
+
 	idx.CRC32s = make([]CRC32, total, total)
-	if err = binary.Read(r, binary.BigEndian, idx.CRC32s); err != nil {
-		return
+	for i := 0; i < total; i++ {
+		if _, err = io.ReadFull(r, idx.CRC32s[i][:]); err != nil {
+			return
+		}
 	}
+
 	idx.Offsets = make([]uint32, total, total)
 	if err = binary.Read(r, binary.BigEndian, idx.Offsets); err != nil {
 		return
@@ -67,11 +73,12 @@ func (idx *PackIndexV2) Parse(r io.Reader) (err error) {
 		return
 	}
 
-	if err = binary.Read(r, binary.BigEndian, &idx.PackFileHash); err != nil {
+	if err = idx.PackFileHash.Fill(r); err != nil {
 		return
 	}
+
 	checksum := hasher.Sum(nil)
-	if err = binary.Read(r, binary.BigEndian, &idx.PackIndexHash); err != nil {
+	if err = idx.PackIndexHash.Fill(r); err != nil {
 		return
 	}
 	if !bytes.Equal(checksum, idx.PackIndexHash[:]) {
