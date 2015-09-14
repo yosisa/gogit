@@ -9,9 +9,10 @@ import (
 )
 
 type packReader struct {
-	f  *os.File
-	br *bufio.Reader
-	zr io.ReadCloser
+	f      *os.File
+	br     *bufio.Reader
+	zr     io.ReadCloser
+	offset int64
 }
 
 func newPackReader(f *os.File) *packReader {
@@ -34,6 +35,7 @@ func (r *packReader) Seek(offset int64, whence int) (n int64, err error) {
 		return
 	}
 	r.br.Reset(r.f)
+	r.offset = offset
 	return
 }
 

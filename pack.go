@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/yosisa/gogit/lru"
 )
 
 var packMagic = [4]byte{'P', 'A', 'C', 'K'}
 
 var ErrObjectNotFound = errors.New("Object not found")
+
+var packEntryCache = lru.NewWithEvict(1<<24, func(key interface{}, value interface{}) {
+	value.(*packEntry).Release()
+})
 
 type PackHeader struct {
 	Magic   [4]byte
@@ -81,6 +87,10 @@ func (p *Pack) entry(id SHA1) (*packEntry, error) {
 }
 
 func (p *Pack) entryAt(offset int64) (*packEntry, error) {
+	if pe, ok := packEntryCache.Get(offset); ok {
+		return pe.(*packEntry), nil
+	}
+
 	if _, err := p.r.Seek(offset, os.SEEK_SET); err != nil {
 		return nil, err
 	}
@@ -95,7 +105,10 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 		size = (header[i+1].Size() << uint(4+7*i)) | size
 	}
 
-	var pe packEntry
+	pe := &packEntry{
+		offset:    offset,
+		headerLen: len(header),
+	}
 	switch typ {
 	case packEntryCommit:
 		pe.typ = "commit"
@@ -128,7 +141,8 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 		if pe.buf, err = applyDelta(entry, delta); err != nil {
 			return nil, err
 		}
-		return &pe, nil
+		packEntryCache.Add(offset, pe)
+		return pe, nil
 	case packEntryRefDelta:
 		id, err := readSHA1(p.r)
 		if err != nil {
@@ -147,13 +161,15 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 		if pe.buf, err = applyDelta(entry, delta); err != nil {
 			return nil, err
 		}
-		return &pe, nil
+		packEntryCache.Add(offset, pe)
+		return pe, nil
 	default:
 		return nil, fmt.Errorf("Unknown pack entry type: %d", typ)
 	}
 
 	pe.pr = p.r
-	return &pe, nil
+	packEntryCache.Add(offset, pe)
+	return pe, nil
 }
 
 func (p *Pack) readDelta() (*bytesBuffer, error) {
@@ -179,9 +195,11 @@ const (
 )
 
 type packEntry struct {
-	typ string
-	buf *bytesBuffer
-	pr  *packReader
+	typ       string
+	buf       *bytesBuffer
+	pr        *packReader
+	offset    int64
+	headerLen int
 }
 
 func (p *packEntry) Type() string {
@@ -190,6 +208,11 @@ func (p *packEntry) Type() string {
 
 func (p *packEntry) ReadAll() ([]byte, error) {
 	if p.buf == nil {
+		if p.pr.offset != p.offset {
+			if _, err := p.pr.Seek(p.offset+int64(p.headerLen), os.SEEK_SET); err != nil {
+				return nil, err
+			}
+		}
 		zr, err := p.pr.ZlibReader()
 		if err != nil {
 			return nil, err
@@ -199,15 +222,28 @@ func (p *packEntry) ReadAll() ([]byte, error) {
 		if p.buf, err = newBytesBuffer(zr); err != nil {
 			return nil, err
 		}
+		packEntryCache.Add(p.offset, p)
 	}
 	return p.buf.Bytes(), nil
 }
 
 func (p *packEntry) Close() (err error) {
-	if p.buf != nil {
-		err = p.buf.Close()
-	}
+	// Don't release bytesBuffer here so that cached entry to be valid
 	return
+}
+
+func (p *packEntry) Release() {
+	if p.buf != nil {
+		p.buf.Close()
+	}
+}
+
+func (p *packEntry) Size() int {
+	size := len(p.typ) + 8 + 8 + 8 + 8
+	if p.buf != nil {
+		size += p.buf.Len()
+	}
+	return size
 }
 
 type packEntryHeader byte
