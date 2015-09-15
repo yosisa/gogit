@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/yosisa/gogit/lru"
 )
@@ -15,7 +16,7 @@ var packMagic = [4]byte{'P', 'A', 'C', 'K'}
 var ErrObjectNotFound = errors.New("Object not found")
 
 var packEntryCache = lru.NewWithEvict(1<<24, func(key interface{}, value interface{}) {
-	value.(*packEntry).Release()
+	value.(*packEntry).Close()
 })
 
 type PackHeader struct {
@@ -88,7 +89,9 @@ func (p *Pack) entry(id SHA1) (*packEntry, error) {
 
 func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 	if pe, ok := packEntryCache.Get(offset); ok {
-		return pe.(*packEntry), nil
+		if entry := pe.(*packEntry); entry.markInUse() {
+			return entry, nil
+		}
 	}
 
 	if _, err := p.r.Seek(offset, os.SEEK_SET); err != nil {
@@ -108,7 +111,9 @@ func (p *Pack) entryAt(offset int64) (*packEntry, error) {
 	pe := &packEntry{
 		offset:    offset,
 		headerLen: len(header),
+		used:      1,
 	}
+
 	switch typ {
 	case packEntryCommit:
 		pe.typ = "commit"
@@ -200,6 +205,7 @@ type packEntry struct {
 	pr        packReader
 	offset    int64
 	headerLen int
+	used      int32
 }
 
 func (p *packEntry) Type() string {
@@ -228,14 +234,15 @@ func (p *packEntry) ReadAll() ([]byte, error) {
 }
 
 func (p *packEntry) Close() (err error) {
-	// Don't release bytesBuffer here so that cached entry to be valid
+	// Release bytesBuffer only if no one used and not in the lru cache.
+	if n := atomic.AddInt32(&p.used, -1); n < 0 && p.buf != nil {
+		p.buf.Close()
+	}
 	return
 }
 
-func (p *packEntry) Release() {
-	if p.buf != nil {
-		p.buf.Close()
-	}
+func (p *packEntry) markInUse() bool {
+	return atomic.AddInt32(&p.used, 1) > 0
 }
 
 func (p *packEntry) Size() int {
