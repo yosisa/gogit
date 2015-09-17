@@ -1,11 +1,11 @@
 package git
 
 import (
-	"bufio"
 	"bytes"
-	"io"
-	"strconv"
+	"fmt"
 	"strings"
+
+	"github.com/yosisa/gogit/lru"
 )
 
 type Tree struct {
@@ -26,34 +26,26 @@ func (t *Tree) SHA1() SHA1 {
 }
 
 func (t *Tree) Parse(data []byte) error {
-	br := bufio.NewReader(bytes.NewReader(data))
-	for {
-		bs, err := br.ReadBytes(' ')
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
+	var mode, name, id, rest []byte
+	var pos int
+	for len(data) > 0 {
+		if pos = bytes.IndexByte(data, ' '); pos == -1 {
 			return ErrUnknownFormat
 		}
-		mode, err := strconv.ParseInt(string(bs[:len(bs)-1]), 8, 32)
+		mode, rest = data[:pos], data[pos+1:]
+
+		if pos = bytes.IndexByte(rest, 0); pos == -1 {
+			return ErrUnknownFormat
+		}
+		name, id, rest = rest[:pos], rest[pos+1:pos+21], rest[pos+21:]
+
+		last := len(mode) + len(name) + 22
+		entry, err := newTreeEntry(mode, name, id, data[:last], t.repo)
 		if err != nil {
 			return err
 		}
-
-		name, err := br.ReadBytes(0)
-		if err != nil {
-			return ErrUnknownFormat
-		}
-		id, err := readSHA1(br)
-		if err != nil {
-			return ErrUnknownFormat
-		}
-
-		t.Entries = append(t.Entries, &TreeEntry{
-			Mode:   int(mode),
-			Name:   string(name[:len(name)-1]),
-			Object: newSparseObject(id, t.repo),
-		})
+		t.Entries = append(t.Entries, entry)
+		data = rest
 	}
 	return nil
 }
@@ -93,8 +85,44 @@ func (t *Tree) find(items []string) (*SparseObject, error) {
 	return nil, ErrObjectNotFound
 }
 
+var treeEntryCache = lru.New(1 << 16)
+
 type TreeEntry struct {
 	Mode   int
 	Name   string
 	Object *SparseObject
+}
+
+func newTreeEntry(mode, name, id, row []byte, repo *Repository) (*TreeEntry, error) {
+	key := string(row)
+	if entry, ok := treeEntryCache.Get(key); ok {
+		return entry.(*TreeEntry), nil
+	}
+	m, err := parseMode(mode)
+	if err != nil {
+		return nil, err
+	}
+	entry := &TreeEntry{
+		Mode:   m,
+		Name:   string(name),
+		Object: newSparseObject(SHA1FromBytes(id), repo),
+	}
+	treeEntryCache.Add(key, entry)
+	return entry, nil
+}
+
+func (t *TreeEntry) Size() int {
+	return 8 + len(t.Name)
+}
+
+func parseMode(bs []byte) (int, error) {
+	var mode int
+	for i, b := range bs {
+		n := b - 0x30
+		if n < 0 || n > 7 {
+			return 0, fmt.Errorf("%d not in octal range", n)
+		}
+		mode = mode<<uint(i*3) | int(n)
+	}
+	return mode, nil
 }

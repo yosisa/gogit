@@ -44,6 +44,11 @@ func SHA1FromHexString(s string) SHA1 {
 	return sha
 }
 
+func SHA1FromBytes(b []byte) (sha SHA1) {
+	copy(sha[:], b)
+	return
+}
+
 func readSHA1(r io.Reader) (sha SHA1, err error) {
 	_, err = io.ReadFull(r, sha[:])
 	return
