@@ -49,14 +49,10 @@ func (t *Tree) Parse(data []byte) error {
 			return ErrUnknownFormat
 		}
 
-		obj, err := t.repo.readObject(id, nil, true)
-		if err != nil {
-			return err
-		}
 		t.Entries = append(t.Entries, &TreeEntry{
 			Mode:   int(mode),
 			Name:   string(name[:len(name)-1]),
-			Object: obj,
+			Object: newSparseObject(id, t.repo),
 		})
 	}
 	return nil
@@ -70,22 +66,25 @@ func (t *Tree) Resolved() bool {
 	return t.Entries != nil
 }
 
-func (t *Tree) Find(path string) (Object, error) {
+func (t *Tree) Find(path string) (*SparseObject, error) {
 	path = strings.TrimLeft(path, "/")
 	return t.find(strings.Split(path, "/"))
 }
 
-func (t *Tree) find(items []string) (Object, error) {
+func (t *Tree) find(items []string) (*SparseObject, error) {
 	if err := t.repo.Resolve(t); err != nil {
 		return nil, err
 	}
 	for _, e := range t.Entries {
 		if e.Name == items[0] {
 			if len(items) == 1 {
-				err := t.repo.Resolve(e.Object)
-				return e.Object, err
+				return e.Object, nil
 			}
-			if tree, ok := e.Object.(*Tree); ok {
+			obj, err := e.Object.Resolve()
+			if err != nil {
+				return nil, err
+			}
+			if tree, ok := obj.(*Tree); ok {
 				return tree.find(items[1:])
 			}
 			break
@@ -97,5 +96,5 @@ func (t *Tree) find(items []string) (Object, error) {
 type TreeEntry struct {
 	Mode   int
 	Name   string
-	Object Object
+	Object *SparseObject
 }
